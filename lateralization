@@ -1,0 +1,675 @@
+"""
+Allen Human Brain Atlas — Paired Hemisphere Expression Ingestion
+================================================================
+Pulls left/right hemisphere paired expression data for a target gene
+across all homologous brain region pairs, stores raw responses in
+MongoDB, and writes a clean lateralisation index table to DuckDB.
+
+Pipeline:
+    1. Fetch all structures in the Human Brain Atlas ontology
+    2. Identify paired left/right homologous regions
+    3. Fetch all donors in the Human Microarray product
+    4. Fetch probes for the target gene
+    5. For each region pair × donor: pull expression via connected service
+    6. Store raw JSON responses in MongoDB (provenance preservation)
+    7. Compute lateralisation index (LI) per gene × region pair × donor
+    8. Write fact_lateralisation table to DuckDB for SQL analysis
+
+Requirements:
+    pip install requests pymongo duckdb pandas
+
+Usage:
+    python allen_lateralisation.py --gene BDNF
+    python allen_lateralisation.py --gene FOXP2 --output foxp2_lateralisation.duckdb
+"""
+
+import argparse
+import logging
+import time
+from datetime import datetime, timezone
+from typing import Optional
+
+import duckdb
+import pandas as pd
+import pymongo
+import requests
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+BASE_URL = "http://api.brain-map.org/api/v2/data/query.json"
+HUMAN_ONTOLOGY = "Human Brain Atlas"
+HUMAN_PRODUCT_ABBREV = "HumanMA"
+HUMAN_PRODUCT_ID = 2          # confirmed from API docs
+PAGE_SIZE = 2000               # Allen API max rows per request
+REQUEST_DELAY = 0.3            # seconds between requests — be a good citizen
+MAX_RETRIES = 3
+RETRY_BACKOFF = 2.0            # exponential backoff multiplier
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
+
+
+# ── HTTP helpers ──────────────────────────────────────────────────────────────
+
+def get_json(params: dict, retries: int = MAX_RETRIES) -> dict:
+    """
+    GET request to the Allen RMA endpoint with retry and backoff.
+
+    The Allen API occasionally returns HTTP 200 with success=false or
+    times out under load. This handles both cases.
+    """
+    for attempt in range(retries):
+        try:
+            response = requests.get(BASE_URL, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            if not data.get("success"):
+                raise ValueError(
+                    f"API returned success=false: {data.get('msg', 'no message')}"
+                )
+            return data
+
+        except (requests.RequestException, ValueError) as exc:
+            if attempt < retries - 1:
+                wait = REQUEST_DELAY * (RETRY_BACKOFF ** attempt)
+                log.warning(f"Request failed (attempt {attempt + 1}): {exc}. "
+                            f"Retrying in {wait:.1f}s...")
+                time.sleep(wait)
+            else:
+                raise
+
+    return {}  # unreachable but satisfies type checkers
+
+
+def paginate(params: dict) -> list[dict]:
+    """
+    Fetch all pages for a query that may exceed PAGE_SIZE rows.
+
+    The Allen API uses start_row / num_rows for pagination.
+    Stops when the returned page is shorter than PAGE_SIZE.
+    """
+    results = []
+    start_row = 0
+
+    while True:
+        paged_params = {**params, "num_rows": PAGE_SIZE, "start_row": start_row}
+        data = get_json(paged_params)
+        page = data.get("msg", [])
+        results.extend(page)
+
+        log.info(f"  Fetched rows {start_row}–{start_row + len(page) - 1} "
+                 f"(total so far: {len(results)})")
+
+        if len(page) < PAGE_SIZE:
+            break  # last page
+
+        start_row += PAGE_SIZE
+        time.sleep(REQUEST_DELAY)
+
+    return results
+
+
+# ── Step 1: Fetch all structures in the Human Brain Atlas ontology ─────────────
+
+def fetch_structures() -> pd.DataFrame:
+    """
+    Fetch every structure in the Human Brain Atlas ontology.
+
+    Returns a DataFrame with columns:
+        id, name, acronym, parent_structure_id, color_hex_triplet
+
+    The hemisphere encoding is in the structure name:
+        "CA1 field of hippocampus, Left"   → left hemisphere
+        "CA1 field of hippocampus, Right"  → right hemisphere
+    Structures without ", Left" or ", Right" are midline/bilateral.
+    """
+    log.info("Fetching Human Brain Atlas structure ontology...")
+
+    params = {
+        "criteria": f"model::Structure"
+                    f",rma::criteria,ontology[name$eq'{HUMAN_ONTOLOGY}']",
+        "rma::options": "[only$eq'id,name,acronym,parent_structure_id,"
+                        "color_hex_triplet,graph_order,depth']",
+    }
+
+    structures = paginate(params)
+    df = pd.DataFrame(structures)
+
+    log.info(f"Fetched {len(df)} structures total")
+    return df
+
+
+# ── Step 2: Identify paired left/right homologous regions ─────────────────────
+
+def build_hemisphere_pairs(structures_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    From the full structure list, identify paired left/right homologous regions.
+
+    The Allen Human Atlas encodes hemisphere in the structure name:
+        "CA1 field of hippocampus, Left"  ← left
+        "CA1 field of hippocampus, Right" ← right
+
+    Strategy:
+        1. Split structures into left, right, and midline sets
+        2. For each left structure, find the matching right structure
+           by stripping ", Left" / ", Right" suffix and matching on base name
+        3. Return a DataFrame of paired (left_id, right_id, base_name, acronym_base)
+
+    Structures without a pair are excluded — midline structures like the
+    corpus callosum cannot contribute to a lateralisation index.
+    """
+    log.info("Building left/right hemisphere pairs...")
+
+    df = structures_df.copy()
+    df["hemisphere"] = "midline"
+    df.loc[df["name"].str.endswith(", Left"), "hemisphere"] = "left"
+    df.loc[df["name"].str.endswith(", Right"), "hemisphere"] = "right"
+
+    # Strip hemisphere suffix to get the base anatomical name
+    df["base_name"] = (
+        df["name"]
+        .str.replace(r",\s*(Left|Right)$", "", regex=True)
+        .str.strip()
+    )
+
+    left = df[df["hemisphere"] == "left"][["id", "base_name", "acronym"]].copy()
+    right = df[df["hemisphere"] == "right"][["id", "base_name", "acronym"]].copy()
+
+    left = left.rename(columns={"id": "left_id", "acronym": "left_acronym"})
+    right = right.rename(columns={"id": "right_id", "acronym": "right_acronym"})
+
+    # Inner join on base_name — only keep structures with both hemispheres
+    pairs = left.merge(right, on="base_name", how="inner")
+
+    log.info(f"Found {len(pairs)} paired left/right homologous regions")
+    log.info(f"(Excluded {len(df[df['hemisphere'] == 'midline'])} midline structures)")
+
+    return pairs[["base_name", "left_id", "left_acronym", "right_id", "right_acronym"]]
+
+
+# ── Step 3: Fetch donors ───────────────────────────────────────────────────────
+
+def fetch_donors() -> list[dict]:
+    """
+    Fetch all 6 donors in the Allen Human Microarray product.
+
+    Returns list of dicts with id, name, age.
+    """
+    log.info("Fetching donors...")
+
+    params = {
+        "criteria": f"model::Donor,rma::criteria,products[id$eq{HUMAN_PRODUCT_ID}]",
+        "include": "age",
+        "rma::options": "[only$eq'donors.id,donors.name']",
+    }
+
+    data = get_json(params)
+    donors = data.get("msg", [])
+    log.info(f"Found {len(donors)} donors: {[d['name'] for d in donors]}")
+    return donors
+
+
+# ── Step 4: Fetch probes for target gene ──────────────────────────────────────
+
+def fetch_probes(gene_symbol: str) -> list[dict]:
+    """
+    Fetch all microarray probes for the target gene in the Human Atlas product.
+
+    Multiple probes per gene are normal. We keep all and average across them
+    when computing the lateralisation index — this is more robust than
+    choosing a single probe arbitrarily.
+    """
+    log.info(f"Fetching probes for gene: {gene_symbol}...")
+
+    params = {
+        "criteria": f"model::Probe"
+                    f",rma::criteria,[probe_type$eq'DNA']"
+                    f",products[abbreviation$eq'{HUMAN_PRODUCT_ABBREV}']"
+                    f",gene[acronym$eq'{gene_symbol}']",
+        "rma::options": "[only$eq'probes.id,probes.name']",
+    }
+
+    data = get_json(params)
+    probes = data.get("msg", [])
+
+    if not probes:
+        raise ValueError(
+            f"No probes found for gene '{gene_symbol}' in the Human Brain Atlas. "
+            f"Check the gene symbol is correct (use HGNC official symbol, e.g. 'BDNF')."
+        )
+
+    probe_ids = [p["id"] for p in probes]
+    log.info(f"Found {len(probes)} probes: {probe_ids}")
+    return probes
+
+
+# ── Step 5 + 6: Fetch expression and store in MongoDB ─────────────────────────
+
+def fetch_and_store_expression(
+    probes: list[dict],
+    donors: list[dict],
+    pairs_df: pd.DataFrame,
+    mongo_collection,
+    gene_symbol: str,
+) -> list[dict]:
+    """
+    For each (structure_id, donor_id) combination, fetch expression via
+    the human_microarray_expression connected service and store raw JSON
+    in MongoDB.
+
+    Design decisions:
+    - Store raw responses in MongoDB before any transformation.
+      This preserves provenance and avoids re-hitting the API if
+      the transformation logic changes downstream.
+    - Idempotency: skip fetches where a document already exists in MongoDB
+      (identified by gene + structure_id + donor_id). Safe to re-run.
+    - We query one structure at a time (not batched) to keep the
+      MongoDB documents self-contained and the error surface small.
+
+    Returns list of all raw response dicts (from MongoDB, not re-fetched).
+    """
+    probe_ids = [p["id"] for p in probes]
+    probe_id_str = ",".join(str(pid) for pid in probe_ids)
+
+    # Collect all structure IDs from both hemispheres
+    all_structure_ids = (
+        list(pairs_df["left_id"]) + list(pairs_df["right_id"])
+    )
+
+    total_requests = len(all_structure_ids) * len(donors)
+    log.info(f"Fetching expression: {len(all_structure_ids)} structures × "
+             f"{len(donors)} donors = {total_requests} requests")
+    log.info("(Skipping any already stored in MongoDB...)")
+
+    raw_records = []
+    completed = 0
+
+    for donor in donors:
+        donor_id = donor["id"]
+        donor_name = donor["name"]
+
+        for structure_id in all_structure_ids:
+
+            # Idempotency check — skip if already stored
+            existing = mongo_collection.find_one({
+                "gene_symbol": gene_symbol,
+                "structure_id": structure_id,
+                "donor_id": donor_id,
+            })
+            if existing:
+                raw_records.append(existing["response"])
+                completed += 1
+                continue
+
+            # Build the connected service query
+            params = {
+                "criteria": (
+                    f"service::human_microarray_expression"
+                    f"[probes$eq{probe_id_str}]"
+                    f"[donors$eq{donor_id}]"
+                    f"[structures$eq{structure_id}]"
+                )
+            }
+
+            try:
+                data = get_json(params)
+                response_body = data.get("msg", {})
+
+                # Store raw response in MongoDB with metadata for retrieval
+                mongo_doc = {
+                    "gene_symbol": gene_symbol,
+                    "structure_id": structure_id,
+                    "donor_id": donor_id,
+                    "donor_name": donor_name,
+                    "probe_ids": probe_ids,
+                    "ingested_at": datetime.now(timezone.utc),
+                    "response": response_body,
+                }
+                mongo_collection.insert_one(mongo_doc)
+                raw_records.append(response_body)
+
+            except Exception as exc:
+                log.warning(
+                    f"Failed to fetch structure {structure_id} / "
+                    f"donor {donor_name}: {exc} — skipping"
+                )
+
+            completed += 1
+            if completed % 20 == 0:
+                log.info(f"  Progress: {completed}/{total_requests}")
+
+            time.sleep(REQUEST_DELAY)
+
+    log.info(f"Expression fetch complete. {len(raw_records)} records available.")
+    return raw_records
+
+
+# ── Step 7: Compute lateralisation index ──────────────────────────────────────
+
+def compute_lateralisation_index(
+    mongo_collection,
+    pairs_df: pd.DataFrame,
+    gene_symbol: str,
+) -> pd.DataFrame:
+    """
+    Compute the lateralisation index (LI) for each brain region pair and donor.
+
+    LI = (left_expression - right_expression) / (left_expression + right_expression)
+
+    LI ranges from -1 to +1:
+        +1 = exclusively left-hemisphere expressed
+        -1 = exclusively right-hemisphere expressed
+         0 = perfectly symmetric
+
+    We average expression across all probes for the gene before computing LI,
+    since multiple probes measure the same gene and averaging reduces noise.
+
+    The output DataFrame has one row per (base_name, donor_id) with:
+        - LI_mean: average LI across donors (computed in the DuckDB step)
+        - LI_raw: the per-donor LI value
+        - left_expr, right_expr: the averaged probe expression values
+    """
+    log.info("Computing lateralisation indices...")
+
+    rows = []
+
+    for _, pair in pairs_df.iterrows():
+        base_name = pair["base_name"]
+        left_id = int(pair["left_id"])
+        right_id = int(pair["right_id"])
+
+        # Pull all documents for this region pair
+        left_docs = list(mongo_collection.find({
+            "gene_symbol": gene_symbol,
+            "structure_id": left_id,
+        }))
+        right_docs = list(mongo_collection.find({
+            "gene_symbol": gene_symbol,
+            "structure_id": right_id,
+        }))
+
+        # Index right docs by donor_id for pairing
+        right_by_donor = {doc["donor_id"]: doc for doc in right_docs}
+
+        for left_doc in left_docs:
+            donor_id = left_doc["donor_id"]
+            donor_name = left_doc["donor_name"]
+            right_doc = right_by_donor.get(donor_id)
+
+            if right_doc is None:
+                # No matching right hemisphere data for this donor — skip
+                continue
+
+            left_expr = _extract_mean_expression(left_doc["response"])
+            right_expr = _extract_mean_expression(right_doc["response"])
+
+            if left_expr is None or right_expr is None:
+                continue
+
+            denominator = left_expr + right_expr
+            if denominator == 0:
+                li = 0.0
+            else:
+                li = (left_expr - right_expr) / denominator
+
+            rows.append({
+                "base_name": base_name,
+                "left_structure_id": left_id,
+                "right_structure_id": right_id,
+                "donor_id": donor_id,
+                "donor_name": donor_name,
+                "left_expr": round(left_expr, 6),
+                "right_expr": round(right_expr, 6),
+                "LI": round(li, 6),
+            })
+
+    df = pd.DataFrame(rows)
+    log.info(f"Computed {len(df)} LI values across "
+             f"{df['base_name'].nunique()} regions and "
+             f"{df['donor_id'].nunique()} donors")
+    return df
+
+
+def _extract_mean_expression(response: dict) -> Optional[float]:
+    """
+    Extract mean expression value from a human_microarray_expression response.
+
+    The response structure (from API docs):
+        {
+          "probes": [
+            {
+              "expression_level": ["13.28", "13.96", ...],  # one per sample
+              "z-score": [...]
+            },
+            ...  # multiple probes
+          ],
+          "samples": [...]  # sampling sites
+        }
+
+    We average expression_level across:
+        1. All samples (there may be multiple sampling sites per structure)
+        2. All probes (multiple probes measure the same gene)
+
+    This double-averaging reduces noise from both spatial and technical variation.
+    """
+    probes = response.get("probes", [])
+    if not probes:
+        return None
+
+    all_values = []
+    for probe in probes:
+        levels = probe.get("expression_level", [])
+        for level in levels:
+            try:
+                all_values.append(float(level))
+            except (ValueError, TypeError):
+                continue
+
+    if not all_values:
+        return None
+
+    return sum(all_values) / len(all_values)
+
+
+# ── Step 8: Write to DuckDB ────────────────────────────────────────────────────
+
+def write_to_duckdb(
+    li_df: pd.DataFrame,
+    pairs_df: pd.DataFrame,
+    gene_symbol: str,
+    db_path: str,
+) -> None:
+    """
+    Write the lateralisation data to DuckDB with two tables:
+
+    dim_region_pairs:
+        One row per homologous region pair — the dimension table.
+        Columns: base_name, left_structure_id, right_structure_id,
+                 left_acronym, right_acronym
+
+    fact_lateralisation:
+        One row per (region pair × donor) — the fact table.
+        Columns: base_name, donor_id, donor_name, left_expr, right_expr, LI
+
+    From DuckDB you can then run:
+        -- Top 20 most left-lateralised regions (averaged across donors)
+        SELECT base_name, AVG(LI) as mean_LI, STDDEV(LI) as std_LI
+        FROM fact_lateralisation
+        GROUP BY base_name
+        ORDER BY mean_LI DESC
+        LIMIT 20;
+
+        -- Most right-lateralised regions
+        SELECT base_name, AVG(LI) as mean_LI
+        FROM fact_lateralisation
+        GROUP BY base_name
+        ORDER BY mean_LI ASC
+        LIMIT 20;
+
+        -- Regions with highest individual variation across donors
+        -- (high std_LI = interesting individual differences)
+        SELECT base_name, AVG(LI) as mean_LI, STDDEV(LI) as std_LI,
+               COUNT(*) as n_donors
+        FROM fact_lateralisation
+        GROUP BY base_name
+        HAVING n_donors >= 3
+        ORDER BY std_LI DESC
+        LIMIT 20;
+    """
+    log.info(f"Writing to DuckDB: {db_path}")
+
+    con = duckdb.connect(db_path)
+
+    # Dimension table: region pairs
+    dim_pairs = pairs_df.copy()
+    dim_pairs["gene_symbol"] = gene_symbol
+    con.execute("DROP TABLE IF EXISTS dim_region_pairs")
+    con.execute("""
+        CREATE TABLE dim_region_pairs AS
+        SELECT * FROM dim_pairs
+    """)
+
+    # Fact table: lateralisation index
+    con.execute("DROP TABLE IF EXISTS fact_lateralisation")
+    con.execute("""
+        CREATE TABLE fact_lateralisation AS
+        SELECT * FROM li_df
+    """)
+
+    # Verify
+    n_regions = con.execute(
+        "SELECT COUNT(DISTINCT base_name) FROM fact_lateralisation"
+    ).fetchone()[0]
+    n_rows = con.execute("SELECT COUNT(*) FROM fact_lateralisation").fetchone()[0]
+
+    log.info(f"DuckDB written: {n_rows} rows across {n_regions} regions")
+    log.info(f"Database: {db_path}")
+
+    # Print the starter query results immediately
+    log.info("\n── Top 10 most LEFT-lateralised regions ──")
+    result = con.execute("""
+        SELECT base_name,
+               ROUND(AVG(LI), 4)    AS mean_LI,
+               ROUND(STDDEV(LI), 4) AS std_LI,
+               COUNT(*)             AS n_donors
+        FROM fact_lateralisation
+        GROUP BY base_name
+        HAVING n_donors >= 2
+        ORDER BY mean_LI DESC
+        LIMIT 10
+    """).fetchdf()
+    print(result.to_string(index=False))
+
+    log.info("\n── Top 10 most RIGHT-lateralised regions ──")
+    result = con.execute("""
+        SELECT base_name,
+               ROUND(AVG(LI), 4)    AS mean_LI,
+               ROUND(STDDEV(LI), 4) AS std_LI,
+               COUNT(*)             AS n_donors
+        FROM fact_lateralisation
+        GROUP BY base_name
+        HAVING n_donors >= 2
+        ORDER BY mean_LI ASC
+        LIMIT 10
+    """).fetchdf()
+    print(result.to_string(index=False))
+
+    con.close()
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Pull paired hemisphere expression from Allen Human Brain Atlas"
+    )
+    parser.add_argument(
+        "--gene", required=True,
+        help="HGNC gene symbol (e.g. BDNF, FOXP2, SLC6A4)"
+    )
+    parser.add_argument(
+        "--mongo-uri", default="mongodb://localhost:27017/",
+        help="MongoDB connection URI (default: localhost)"
+    )
+    parser.add_argument(
+        "--mongo-db", default="allen_brain",
+        help="MongoDB database name"
+    )
+    parser.add_argument(
+        "--output", default=None,
+        help="DuckDB output path (default: {gene}_lateralisation.duckdb)"
+    )
+    args = parser.parse_args()
+
+    gene = args.gene.upper().strip()
+    db_path = args.output or f"{gene.lower()}_lateralisation.duckdb"
+
+    log.info(f"Starting Allen lateralisation pipeline")
+    log.info(f"Gene: {gene}  |  Output: {db_path}")
+    log.info(f"MongoDB: {args.mongo_uri}{args.mongo_db}")
+
+    # MongoDB setup
+    mongo_client = pymongo.MongoClient(args.mongo_uri)
+    mongo_db = mongo_client[args.mongo_db]
+    collection = mongo_db[f"expression_raw_{gene.lower()}"]
+
+    # Create indexes for idempotency checks and retrieval
+    collection.create_index([
+        ("gene_symbol", 1),
+        ("structure_id", 1),
+        ("donor_id", 1),
+    ], unique=True)
+
+    try:
+        # Step 1: Structures
+        structures_df = fetch_structures()
+
+        # Step 2: Pairs
+        pairs_df = build_hemisphere_pairs(structures_df)
+        if pairs_df.empty:
+            raise RuntimeError(
+                "No hemisphere pairs found. This may indicate the ontology "
+                "encoding has changed — check structure names in the API response."
+            )
+
+        # Step 3: Donors
+        donors = fetch_donors()
+
+        # Step 4: Probes
+        probes = fetch_probes(gene)
+
+        # Steps 5 + 6: Fetch expression → MongoDB
+        fetch_and_store_expression(
+            probes, donors, pairs_df, collection, gene
+        )
+
+        # Step 7: Compute LI
+        li_df = compute_lateralisation_index(collection, pairs_df, gene)
+
+        if li_df.empty:
+            log.warning(
+                "No lateralisation data computed. This likely means the gene "
+                "had no expression in paired regions, or all fetches failed."
+            )
+            return
+
+        # Step 8: Write DuckDB
+        write_to_duckdb(li_df, pairs_df, gene, db_path)
+
+        log.info("Pipeline complete.")
+        log.info(f"Run SQL analysis: python -c \""
+                 f"import duckdb; con=duckdb.connect('{db_path}'); "
+                 f"print(con.execute('SELECT * FROM fact_lateralisation "
+                 f"LIMIT 10').fetchdf())\"")
+
+    finally:
+        mongo_client.close()
+
+
+if __name__ == "__main__":
+    main()
