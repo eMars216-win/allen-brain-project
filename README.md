@@ -287,3 +287,10 @@ pip install requests pymongo duckdb pandas numpy
 
 *This project is a work in progress. The pipeline architecture and
 analytical questions will evolve as the data reveals its structure.*
+
+---
+
+## Known Issues
+
+### API Service
+human_microarray_expression API service intermittently down (confirmed via Allen community forum, recurring as of June 2026)
