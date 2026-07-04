@@ -1,0 +1,65 @@
+import duckdb
+import pandas as pd
+from pathlib import Path
+
+# Point this to location of extracted donor zip
+DONOR_DIR = Path(r"C:\Users\emars\H0351.2001")
+DB_PATH   = "allen_lateralisation.duckdb"
+
+print("Loading SampleAnnot...")
+samples = pd.read_csv(DONOR_DIR / "SampleAnnot.csv")
+samples.insert(0, "donor_id", "H0351.2001")
+print(f"  {len(samples)} samples | columns: {list(samples.columns)}")
+
+print("Loading Probes...")
+probes = pd.read_csv(DONOR_DIR / "Probes.csv")
+print(f"  {len(probes)} probes | columns: {list(probes.columns)}")
+
+print("Loading MicroarrayExpression (may take a moment)...")
+expr_wide = pd.read_csv(DONOR_DIR / "MicroarrayExpression.csv", header=None)
+print(f"  Shape: {expr_wide.shape} (probes × samples+1)")
+
+# First column is probe_id, remaining columns are samples
+expr_wide.columns = ["probe_id"] + list(range(len(samples)))
+
+print("Melting to long format...")
+expr_long = expr_wide.melt(
+    id_vars=["probe_id"],
+    var_name="sample_idx",
+    value_name="expression"
+)
+print(f"  Long format rows: {len(expr_long):,}")
+
+# Join sample metadata
+expr_long = expr_long.merge(
+    samples.reset_index().rename(columns={"index": "sample_idx"}),
+    on="sample_idx",
+    how="left"
+)
+
+# Join probe metadata
+expr_long = expr_long.merge(
+    probes[["probe_id", "gene_symbol", "gene_name", "entrez_id"]],
+    on="probe_id",
+    how="left"
+)
+
+print("Writing to DuckDB...")
+con = duckdb.connect(DB_PATH)
+con.execute("DROP TABLE IF EXISTS fact_expression")
+con.execute("CREATE TABLE fact_expression AS SELECT * FROM expr_long")
+
+n = con.execute("SELECT COUNT(*) FROM fact_expression").fetchone()[0]
+print(f"  Rows written: {n:,}")
+
+print("\nSample output:")
+print(con.execute("""
+    SELECT gene_symbol, structure_name, 
+           ROUND(expression, 4) AS expression,
+           mni_x, mni_y, mni_z
+    FROM fact_expression
+    LIMIT 5
+""").fetchdf().to_string(index=False))
+
+con.close()
+print("\nDone.")
