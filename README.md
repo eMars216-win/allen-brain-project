@@ -216,8 +216,18 @@ allen-lateralisation/
 
 ## Current Status
 
-Current Status
-ComponentStatusAPI connectivityConfirmed workingStructure ontology fetchWorking — 1839 structuresHemisphere pair identificationWorking — 313 pairs confirmedPairing logic (hemisphere_id + graph_order)ImplementedHuman microarray expression APIBroken — recurring outage confirmed via Allen forum, bug reportedFlat file ingestion (workaround)Working — bulk download replaces APIDonor H0351.2001 loadedComplete — 58,692 probes, 29,131 genes, 363 samples, 21.3M rowsDonors H0351.2002, 1009, 1012, 1015, 1016Pending — same script, change DONOR_DIR per donorMongoDB ingestionDeprioritised — flat file → DuckDB direct is cleanerDuckDB star schemaImplemented — fact_expression, dim_probe, dim_sampleLateralisation index computationPending — requires all 6 donors loadedSQL analytical viewsPendingInitial BDNF analysisFirst result — highest expression in dentate gyrus (left)FOXP2 lateralisation analysisPending — requires all 6 donorsMcGilchrist GO enrichment analysisPlanned — Phase 2Kernel MMD distributional analysisPlanned — Phase 2
+| Area | Current Design | Purpose / Rationale | Trade‑offs / Complexity |
+| --- | --- | --- | --- |
+| **Ontology Structure** | Allen Brain Atlas tree, 8+ levels | Accurate biological hierarchy | Deep recursion expensive |
+| **Hierarchy Traversal** | **Bridge table** (ancestor_id, descendant_id, depth) | Converts recursive traversal → simple SQL join | Must rebuild if ontology changes |
+| **Ontology Change Frequency** | Rare | Justifies precomputing transitive closure | Build-time cost O(n²) |
+| **Query Pattern** | Join on bridge table to fetch descendants | Fast, deterministic, scalable | None at query time |
+| **Fact Table Grain** | **probe × sampling site × donor** | Preserves atomic raw measurements | Larger table size |
+| **Aggregation Strategy** | Deferred to SQL views | Transparent, flexible, scientifically honest | Query-time cost O(n) |
+| **Downstream Flexibility** | High (mean/median/weighted/normalized) | Supports multiple scientific models | Requires user-defined views |
+| **Transformation Philosophy** | Late-binding semantics | Raw data stays raw; reversible | More logic in SQL layer |
+| **Performance Model** | Structure = precomputed; measurements = preserved | Minimizes entropy; maximizes adaptability | Two different complexity regimes |
+| **Overall Architecture** | Precompute structure + preserve raw truth | Fast queries + flexible analytics | Occasional rebuild + larger fact table |
 ---
 
 ## Intellectual Context
