@@ -1,0 +1,7 @@
+ load donor H0351.2001 flat file into DuckDB
+
+- Pivot from broken human_microarray_expression API to bulk flat file download
+- Load 58,692 probes across 29,131 genes, 363 samples, 21.3M rows
+- DuckDB-side join to avoid Pandas memory ceiling on large melt
+- First analytical query confirms BDNF highest in dentate gyrus (left)
+- Bug report filed with Allen Institute forum (recurring API outage)
