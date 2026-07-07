@@ -216,21 +216,8 @@ allen-lateralisation/
 
 ## Current Status
 
-| Component | Status |
-|-----------|--------|
-| API connectivity | Confirmed working |
-| Structure ontology fetch | Working — 1839 structures |
-| Hemisphere pair identification | Working — 313 pairs confirmed |
-| Pairing logic (hemisphere_id + graph_order) | Implemented |
-| Human microarray expression endpoint | In progress |
-| MongoDB ingestion | Implemented, awaiting expression data |
-| DuckDB transformation | Implemented, awaiting expression data |
-| Lateralisation index computation | Implemented, awaiting expression data |
-| SQL analytical views | Implemented, awaiting expression data |
-| Initial gene analysis (BDNF, FOXP2) | Pending |
-| McGilchrist GO enrichment analysis | Planned — Phase 2 |
-| Kernel MMD distributional analysis | Planned — Phase 2 |
-
+Current Status
+ComponentStatusAPI connectivityConfirmed workingStructure ontology fetchWorking — 1839 structuresHemisphere pair identificationWorking — 313 pairs confirmedPairing logic (hemisphere_id + graph_order)ImplementedHuman microarray expression APIBroken — recurring outage confirmed via Allen forum, bug reportedFlat file ingestion (workaround)Working — bulk download replaces APIDonor H0351.2001 loadedComplete — 58,692 probes, 29,131 genes, 363 samples, 21.3M rowsDonors H0351.2002, 1009, 1012, 1015, 1016Pending — same script, change DONOR_DIR per donorMongoDB ingestionDeprioritised — flat file → DuckDB direct is cleanerDuckDB star schemaImplemented — fact_expression, dim_probe, dim_sampleLateralisation index computationPending — requires all 6 donors loadedSQL analytical viewsPendingInitial BDNF analysisFirst result — highest expression in dentate gyrus (left)FOXP2 lateralisation analysisPending — requires all 6 donorsMcGilchrist GO enrichment analysisPlanned — Phase 2Kernel MMD distributional analysisPlanned — Phase 2
 ---
 
 ## Intellectual Context
