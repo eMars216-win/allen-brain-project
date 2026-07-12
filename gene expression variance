@@ -1,0 +1,54 @@
+python variance_analysis.py
+ probe_id  gene_symbol                                                                               gene_name  variance  std_dev  mean_expr  min_expr  max_expr  n_samples
+  1058533          CCK                                                                         cholecystokinin   15.9023   3.9878    10.8318    1.4078   16.3630        363
+  1058534          CCK                                                                         cholecystokinin   15.2909   3.9104    11.4459    1.4078   17.0381        363
+  1035256      TMEM155                                                               transmembrane protein 155   15.1116   3.8874     7.2991    1.4078   11.5618        363
+  1016922         NRGN                                           neurogranin (protein kinase C substrate, RC3)   14.8175   3.8493    11.1591    1.4078   15.1471        363
+  1056965       FOXG1B                                                                         forkhead box G1   14.7184   3.8365     7.7137    1.4078   11.3090        363
+  1025747          SST                                                                            somatostatin   13.6377   3.6929    10.1068    1.4078   16.9560        363
+  1053752      NEUROD2                                                              neuronal differentiation 2   13.5685   3.6835     9.8992    1.4078   14.7433        363
+  1050120      SLC30A3                                   solute carrier family 30 (zinc transporter), member 3   13.5284   3.6781     8.4698    1.4078   13.3604        363
+  1048356          GDA                                                                       guanine deaminase   12.3055   3.5079     7.8210    1.4078   11.5467        363
+  1057739          DAO                                                                    D-amino-acid oxidase   11.4091   3.3777     4.7377    1.4078   11.8259        363
+  1025748          SST                                                                            somatostatin   10.6945   3.2702     8.4118    1.4078   15.9552        363
+  1050553          TTR                                                                           transthyretin   10.3629   3.2192     5.1198    1.4078   18.5856        363
+  1040880      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6   10.2826   3.2067     7.1962    1.4078   14.2572        363
+  1049116        HSPB3                                                              heat shock 27kDa protein 3   10.2745   3.2054     6.3269    1.4078   10.1502        363
+  1040959      SLC17A7 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 7   10.2560   3.2025    10.1020    2.5678   14.4153        363
+  1054779        KCNS1               potassium voltage-gated channel, delayed-rectifier, subfamily S, member 1    9.8737   3.1422     6.4301    1.4078   10.4903        363
+  1040882      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    9.8371   3.1364     7.0364    1.4078   13.9886        363
+  1040884      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    9.8101   3.1321     6.7826    1.4078   13.9946        363
+  1040879      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    9.7457   3.1218     6.6759    1.4078   13.6991        363
+  1012781         NRGN                                           neurogranin (protein kinase C substrate, RC3)    9.6688   3.1095     7.4310    1.4078   11.3903        363
+  1053753      NEUROD1                                                              neuronal differentiation 1    9.6685   3.1094     5.3076    1.4078   12.4597        363
+  1033528        CREG2                                            cellular repressor of E1A-stimulated genes 2    9.6216   3.1019     9.7091    1.4078   13.3571        363
+  1048366       CARTPT                                                                      CART prepropeptide    9.3769   3.0622     7.2088    1.4078   14.4214        363
+  1048367       CARTPT                                                                      CART prepropeptide    9.3410   3.0563     7.7150    1.4078   14.6213        363
+  1040058         ANO3                                                                             anoctamin 3    9.2235   3.0370     7.7023    1.4078   14.7486        363
+  1048368       CARTPT                                                                      CART prepropeptide    9.0918   3.0153     7.2169    1.4078   14.3398        363
+  1016087     LY86-AS1                                               LY86 antisense RNA 1 (non-protein coding)    9.0045   3.0008     5.0024    1.4078    8.7590        363
+  1023157         CRYM                                                                          crystallin, mu    8.9037   2.9839     9.3184    1.4171   13.0841        363
+  1044726        KCNV1                                                potassium channel, subfamily V, member 1    8.8842   2.9806     6.0530    1.4078    9.3637        363
+  1040894      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    8.7870   2.9643     6.5351    1.4078   13.3318        363
+  1048364       CARTPT                                                                      CART prepropeptide    8.7642   2.9604     7.4122    1.4078   14.4214        363
+  1048365       CARTPT                                                                      CART prepropeptide    8.5157   2.9182     6.8161    1.4078   13.8105        363
+  1040885      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    8.5124   2.9176     6.3007    1.4078   12.5356        363
+  1065445 A_23_P200843                                                 AGILENT probe A_23_P200843 (non-RefSeq)    8.4374   2.9047     8.1215    1.4078   11.3828        363
+  1033529        CREG2                                            cellular repressor of E1A-stimulated genes 2    8.4022   2.8987     8.1166    1.4078   11.4603        363
+  1069798 A_24_P292849                                                 AGILENT probe A_24_P292849 (non-RefSeq)    8.3729   2.8936     3.0548    1.4078   11.4331        363
+  1070470  A_23_P47546                                                  AGILENT probe A_23_P47546 (non-RefSeq)    8.3358   2.8872     6.1321    1.4078    9.0732        363
+  1048690         LHX2                                                                          LIM homeobox 2    8.2862   2.8786     8.6564    1.4078   12.0769        363
+  1058379        CDH15                                             cadherin 15, type 1, M-cadherin (myotubule)    8.2488   2.8721     3.4914    1.4078   11.7203        363
+  1025749          SST                                                                            somatostatin    8.2029   2.8641     7.6723    1.4078   14.6478        363
+  1057965          CRH                                                         corticotropin releasing hormone    8.1308   2.8515     7.0498    1.4078   14.5923        363
+  1026514       THEMIS                                                          thymocyte selection associated    8.0199   2.8319     4.9559    1.4078    9.8753        363
+  1053652          NPY                                                                          neuropeptide Y    8.0090   2.8300     8.4972    2.2696   14.4694        363
+  1041280        CRTAM                                                cytotoxic and regulatory T cell molecule    7.9533   2.8202     3.0870    1.4078   11.3387        363
+  1053305        PCSK1                                           proprotein convertase subtilisin/kexin type 1    7.8722   2.8057     8.2745    1.4078   13.0254        363
+  1054196          MET                                  met proto-oncogene (hepatocyte growth factor receptor)    7.7501   2.7839     6.2444    1.4078   11.5206        363
+  1048357          GDA                                                                       guanine deaminase    7.7205   2.7786     6.5072    1.4078   10.5385        363
+  1052410        PVALB                                                                             parvalbumin    7.6983   2.7746     8.5257    1.4078   14.3414        363
+  1069062  A_32_P85405                                                  AGILENT probe A_32_P85405 (non-RefSeq)    7.6735   2.7701     7.0106    1.4078   10.9556        363
+  1040915      SLC17A6 solute carrier family 17 (sodium-dependent inorganic phosphate cotransporter), member 6    7.6629   2.7682     5.9146    1.4078   12.4262        363
+
+Saved to high_variance_probes.csv
