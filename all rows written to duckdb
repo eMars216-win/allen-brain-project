@@ -1,0 +1,7 @@
+>python -c "import duckdb; con = duckdb.connect(r'C:\Users\emars\allen_lateralisation.duckdb'); print(con.execute('SHOW TABLES').fetchdf().to_string()); print(con.execute('SELECT COUNT(*) FROM fact_expression').fetchone()); con.close()"
+100% ?██████████████████████████████████████? (00:00:02.72 elapsed)
+              name
+0        dim_probe
+1       dim_sample
+2  fact_expression
+(21305196,)
