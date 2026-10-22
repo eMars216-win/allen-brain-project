@@ -1,0 +1,6 @@
+duckdb
+pandas
+numpy
+requests
+pymongo
+mcp[cli]>=2,<3

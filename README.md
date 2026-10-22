@@ -122,6 +122,11 @@ Allen Brain Atlas API
   Lateralisation index (LI)
   Gene ontology enrichment
   McGilchrist framework mapping
+        │
+        ▼
+  [MCP Access]
+  Read-only tools for warehouse status,
+  gene lookup, lateralisation, and variability
 ```
 
 **Why MongoDB + DuckDB rather than one or the other:**
@@ -187,24 +192,16 @@ allen-lateralisation/
 ├── README.md                    ← this file
 ├── requirements.txt             ← Python dependencies
 │
-├── allen_lateralisation.py      ← ingestion pipeline
-│                                   fetch_structures()
-│                                   build_hemisphere_pairs()
-│                                   fetch_donors()
-│                                   fetch_probes()
-│                                   fetch_and_store_expression()
-│                                   compute_lateralisation_index()
-│                                   write_to_duckdb()
+├── allen_lateralisation.py      ← hemisphere pairing and warehouse helpers
 │
 ├── allen_transform.py           ← transformation layer
-│                                   flatten_expression_doc()
-│                                   flatten_all_documents()
-│                                   write_fact_expression()
-│                                   run_diagnostics()
+│                                   CSV loading and dimension/fact transforms
 │
-├── exploration/                 ← Jupyter notebooks
-│   ├── 01_api_exploration.ipynb ← API structure investigation
-│   └── 02_hemisphere_pairs.ipynb← pairing logic development
+├── build_duckdb_from_csv.py     ← load downloaded Allen CSVs into DuckDB
+├── mcp_server.py                ← read-only MCP interface to the warehouse
+│
+├── exploration/                 ← design and investigation notes
+│   └── README.md
 │
 └── queries/                     ← saved SQL analyses
     ├── top_lateralised_genes.sql
@@ -262,12 +259,48 @@ pymongo       # MongoDB document storage
 duckdb        # Analytical warehouse
 pandas        # Tabular transformation
 numpy         # Numerical operations
+mcp[cli]>=2,<3 # Read-only MCP server
 ```                                                                                                                                                                          
 
 Install:
 ```cmd
-pip install requests pymongo duckdb pandas numpy
+python -m pip install -r requirements.txt
 ```
+
+---
+
+## MCP Server
+
+`mcp_server.py` exposes the DuckDB warehouse to MCP-compatible clients such as
+Codex. It connects to the same database built by this project and provides
+read-only tools to check warehouse readiness, find genes, rank lateralised
+genes, query region-pair lateralisation, and rank regions by donor variability.
+It does not expose arbitrary SQL or write operations.
+
+To build the warehouse from downloaded Allen Human Brain Atlas files, place
+`MicroarrayExpression.csv`, `Probes.csv`, `SampleAnnot.csv`, and `Ontology.csv`
+in `raw/`, then run:
+
+```powershell
+python build_duckdb_from_csv.py --raw-dir raw --database allen_lateralisation.duckdb --donor-id 9861
+```
+
+The server requires Python 3.11 or newer. Start it over stdio with
+`python mcp_server.py`. By default it reads `allen_lateralisation.duckdb` from
+the project directory; set `ALLEN_DUCKDB_PATH` to point to another database.
+
+For Codex, add this entry to the trusted project's `.codex/config.toml`, using
+the absolute path to this checkout:
+
+```toml
+[mcp_servers.allen_lateralisation]
+command = "python"
+args = ["mcp_server.py"]
+cwd = "C:/path/to/allen-brain-project"
+```
+
+Restart or reload Codex after changing the MCP configuration. Query results
+reflect only the donors present in the configured DuckDB warehouse.
 
 ---
 
